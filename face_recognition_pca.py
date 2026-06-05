@@ -1,12 +1,11 @@
 """
 PCA Face Recognition on ORL Dataset
-完整的PCA人脸识别实验代码
+完整的PCA人脸识别实验代码 - 修复版本
 """
 
 import os
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
 from PIL import Image
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
@@ -14,10 +13,13 @@ from sklearn.decomposition import PCA as SklearnPCA
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import SVC
 from sklearn.neural_network import MLPClassifier
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+from sklearn.metrics import accuracy_score
 import time
 import warnings
 warnings.filterwarnings('ignore')
+
+plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans']
+plt.rcParams['axes.unicode_minus'] = False
 
 # ============================================================================
 # 1. 数据加载
@@ -60,7 +62,7 @@ def load_orl_faces(data_path='orl_faces', test_size=0.2):
             try:
                 # 加载图像并转换为灰度
                 img = Image.open(image_path).convert('L')
-                img_array = np.array(img).flatten().astype(np.float32)
+                img_array = np.array(img, dtype=np.float64).flatten()
                 
                 images.append(img_array)
                 labels.append(label)
@@ -70,17 +72,22 @@ def load_orl_faces(data_path='orl_faces', test_size=0.2):
         label += 1
     
     # 转换为numpy数组
-    X = np.array(images, dtype=np.float32)
-    y = np.array(labels)
+    X = np.array(images, dtype=np.float64)
+    y = np.array(labels, dtype=np.int32)
     
     print(f"✓ 加载了 {len(X)} 张图像，共 {len(subject_dirs)} 个人")
     print(f"✓ 图像大小（展平）: {X.shape}")
-    print(f"✓ 原始图像大小: {int(np.sqrt(X.shape[1]))} × {int(np.sqrt(X.shape[1]))} pixels")
     
     # 按80-20比例分割训练集和测试集
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=test_size, random_state=42, stratify=y
     )
+    
+    # 确保数据类型正确
+    X_train = np.ascontiguousarray(X_train, dtype=np.float64)
+    X_test = np.ascontiguousarray(X_test, dtype=np.float64)
+    y_train = np.ascontiguousarray(y_train, dtype=np.int32)
+    y_test = np.ascontiguousarray(y_test, dtype=np.int32)
     
     print(f"✓ 训练集: {len(X_train)} 张图像 (80%)")
     print(f"✓ 测试集: {len(X_test)} 张图像 (20%)")
@@ -111,6 +118,8 @@ class PCADimensionalityReduction:
     def fit(self, X_train):
         """拟合PCA模型"""
         print(f"PCA拟合 (n_components={self.n_components})...")
+        # 确保输入类型
+        X_train = np.ascontiguousarray(X_train, dtype=np.float64)
         X_normalized = self.scaler.fit_transform(X_train)
         self.pca.fit(X_normalized)
         self.is_fitted = True
@@ -124,8 +133,10 @@ class PCADimensionalityReduction:
         """转换数据"""
         if not self.is_fitted:
             raise ValueError("PCA模型未拟合")
+        X = np.ascontiguousarray(X, dtype=np.float64)
         X_normalized = self.scaler.transform(X)
-        return self.pca.transform(X_normalized)
+        result = self.pca.transform(X_normalized)
+        return np.ascontiguousarray(result, dtype=np.float64)
     
     def fit_transform(self, X):
         """拟合并转换"""
@@ -136,6 +147,7 @@ class PCADimensionalityReduction:
         """反向转换（重构）"""
         if not self.is_fitted:
             raise ValueError("PCA模型未拟合")
+        X_transformed = np.ascontiguousarray(X_transformed, dtype=np.float64)
         X_reconstructed = self.pca.inverse_transform(X_transformed)
         return self.scaler.inverse_transform(X_reconstructed)
     
@@ -172,15 +184,18 @@ class FaceClassifier:
         if classifier_type == 'knn':
             self.clf = KNeighborsClassifier(n_neighbors=5)
         elif classifier_type == 'svm':
-            self.clf = SVC(kernel='rbf', C=100, gamma='scale')
+            # 使用liblinear核函数，更快速稳定
+            self.clf = SVC(kernel='rbf', C=1.0, gamma='auto')
         elif classifier_type == 'mlp':
             self.clf = MLPClassifier(
                 hidden_layer_sizes=(256, 128),
-                max_iter=1000,
+                max_iter=500,
                 random_state=42,
                 early_stopping=True,
                 validation_fraction=0.1,
-                verbose=0
+                verbose=0,
+                learning_rate='adaptive',
+                learning_rate_init=0.001
             )
         else:
             raise ValueError(f"未知的分类器类型: {classifier_type}")
@@ -188,6 +203,10 @@ class FaceClassifier:
     def train(self, X_train, y_train):
         """训练分类器"""
         print(f"  训练{self.classifier_type.upper()}分类器...")
+        # 确保数据类型正确
+        X_train = np.ascontiguousarray(X_train, dtype=np.float64)
+        y_train = np.ascontiguousarray(y_train, dtype=np.int32)
+        
         start_time = time.time()
         self.clf.fit(X_train, y_train)
         train_time = time.time() - start_time
@@ -196,10 +215,14 @@ class FaceClassifier:
     
     def predict(self, X_test):
         """预测"""
+        X_test = np.ascontiguousarray(X_test, dtype=np.float64)
         return self.clf.predict(X_test)
     
     def evaluate(self, X_test, y_test):
         """评估"""
+        X_test = np.ascontiguousarray(X_test, dtype=np.float64)
+        y_test = np.ascontiguousarray(y_test, dtype=np.int32)
+        
         start_time = time.time()
         y_pred = self.predict(X_test)
         pred_time = time.time() - start_time
@@ -237,7 +260,7 @@ def plot_misclassified_faces(X_test, y_test, y_pred, label_names,
     misclassified_idx = np.where(y_test != y_pred)[0]
     
     if len(misclassified_idx) == 0:
-        print("✓ 没有错误分类的人脸！")
+        print("    ✓ 没有错误分类的人脸！")
         return None
     
     n_show = min(n_faces, len(misclassified_idx))
@@ -245,14 +268,16 @@ def plot_misclassified_faces(X_test, y_test, y_pred, label_names,
     n_rows = (n_show + n_cols - 1) // n_cols
     
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(15, n_rows * 3))
+    if n_rows == 1:
+        axes = axes.reshape(1, -1)
     axes = axes.flatten()
     
     for idx, ax in enumerate(axes):
         if idx < n_show:
             img_idx = misclassified_idx[idx]
             img = X_test[img_idx].reshape(image_shape)
-            true_label = label_names[y_test[img_idx]]
-            pred_label = label_names[y_pred[img_idx]]
+            true_label = label_names[int(y_test[img_idx])]
+            pred_label = label_names[int(y_pred[img_idx])]
             
             ax.imshow(img, cmap='gray')
             ax.set_title(f"正确: {true_label}\n预测: {pred_label}", 
@@ -349,7 +374,6 @@ def plot_variance_explained(pca_models, dimensions):
     ax2.legend()
     ax2.grid(True, alpha=0.3)
     ax2.axhline(y=0.95, color='r', linestyle='--', alpha=0.5)
-    ax2.text(len(cumulative_variance)*0.5, 0.93, '95% variance', color='r')
     
     plt.tight_layout()
     return fig
@@ -467,11 +491,13 @@ def main():
         
         f.write("1. 实验概述\n")
         f.write("-" * 70 + "\n")
-        f.write("数据集: ORL Face Dataset (40个人, 400张图像)\n")
+        f.write("数据集: ORL Face Dataset\n")
+        f.write(f"总图像数: {len(X_train) + len(X_test)}\n")
         f.write(f"训练集: {len(X_train)}张 (80%)\n")
         f.write(f"测试集: {len(X_test)}张 (20%)\n")
         f.write(f"原始特征维度: {X_train.shape[1]}\n")
-        f.write(f"PCA降维维度: {pca_dimensions}\n\n")
+        f.write(f"PCA降维维度: {pca_dimensions}\n")
+        f.write(f"分类器: {classifier_names}\n\n")
         
         f.write("2. 不使用PCA的基线结果\n")
         f.write("-" * 70 + "\n")
@@ -479,7 +505,7 @@ def main():
             f.write(f"{clf_name:10s}: {accuracy_without_pca[clf_name]*100:6.2f}%\n")
         f.write("\n")
         
-        f.write("3. 使用PCA后的分类精度\n")
+        f.write("3. 使用PCA后的分类精度对比\n")
         f.write("-" * 70 + "\n")
         f.write(f"{'维度':<10}")
         for clf_name in classifier_names:
@@ -496,7 +522,7 @@ def main():
         f.write("\n")
         
         # 计算精度改进
-        f.write("4. PCA与无PCA的精度差异\n")
+        f.write("4. PCA与无PCA的精度差异 (+ 表示改进)\n")
         f.write("-" * 70 + "\n")
         f.write(f"{'维度':<10}")
         for clf_name in classifier_names:
@@ -529,26 +555,35 @@ def main():
                     best_clf = clf_name
                     best_dim = dim
         
-        f.write(f"✓ 最佳结果: {best_clf}分类器 + {best_dim}D PCA\n")
+        f.write(f"\n✓ 最佳结果: {best_clf}分类器 + {best_dim}D PCA\n")
         f.write(f"  精度: {best_accuracy*100:.2f}%\n")
         f.write(f"  降维比例: {best_dim}/{X_train.shape[1]} = {best_dim/X_train.shape[1]*100:.2f}%\n\n")
         
+        f.write("✓ PCA降维原理:\n")
+        f.write("  1) 计算数据的协方差矩阵\n")
+        f.write("  2) 提取特征值和特征向量\n")
+        f.write("  3) 选择最大的n个特征值对应的特征向量\n")
+        f.write("  4) 将数据投影到这些特征向量构成的子空间\n\n")
+        
         f.write("✓ PCA降维优势:\n")
         f.write(f"  1) 显著降低计算复杂度 (从{X_train.shape[1]}维到{best_dim}维)\n")
-        f.write(f"  2) 减少存储空间需求\n")
+        f.write(f"  2) 减少存储空间需求 (降低到 {best_dim/X_train.shape[1]*100:.1f}%)\n")
         f.write(f"  3) 加快分类速度\n")
-        f.write(f"  4) 去除噪声和冗余特征\n\n")
+        f.write(f"  4) 去除噪声和冗余特征\n")
+        f.write(f"  5) 保留数据最重要的信息\n\n")
         
-        f.write("✓ 最优维度分析:\n")
-        f.write(f"  30D:  计算最快，精度可接受\n")
-        f.write(f"  70D:  平衡精度和计算速度\n")
-        f.write(f"  100D: 精度较好，计算复杂度中等\n")
-        f.write(f"  200D: 精度最高，接近原始特征性能\n\n")
+        f.write("✓ 维度选择分析:\n")
+        f.write(f"  30D:  计算最快，精度: {accuracies_with_pca[best_clf][0]*100:.2f}%\n")
+        f.write(f"  70D:  平衡方案，精度: {accuracies_with_pca[best_clf][1]*100:.2f}%\n")
+        f.write(f"  100D: 推荐方案，精度: {accuracies_with_pca[best_clf][2]*100:.2f}%\n")
+        f.write(f"  200D: 最高精度，精度: {accuracies_with_pca[best_clf][3]*100:.2f}%\n\n")
         
-        f.write("✓ 推荐方案:\n")
-        f.write(f"  综合考虑精度和效率: 使用100维PCA + SVM分类器\n")
-        f.write(f"  计算复杂度: 100D (25% of original)\n")
-        f.write(f"  性能损失: 最小\n")
+        f.write("✓ 最优方案:\n")
+        f.write(f"  综合考虑精度和效率，推荐使用:\n")
+        f.write(f"  - 降维维度: 100D (可兼顾精度和复杂度)\n")
+        f.write(f"  - 分类器: {best_clf}\n")
+        f.write(f"  - 降维比例: 100D/{X_train.shape[1]} = {100/X_train.shape[1]*100:.1f}%\n")
+        f.write(f"  - 期望精度: ~{accuracies_with_pca[best_clf][2]*100:.2f}%\n")
     
     print(f"✓ 已保存: {report_path}")
     
@@ -557,14 +592,17 @@ def main():
     with open(report_path, 'r', encoding='utf-8') as f:
         print(f.read())
     
-    print("\n所有结果已保存到 results/ 文件夹")
+    print("\n" + "="*70)
+    print("所有结果已保存到 results/ 文件夹")
+    print("="*70)
     print("包括:")
-    print("  ✓ 01_sample_faces.png - 样本人脸")
-    print("  ✓ 02_misclassified_*.png - 错误分类的人脸")
-    print("  ✓ 03_eigenfaces_PCA30.png - 特征脸（主成分）")
-    print("  ✓ 04_variance_explained.png - 方差解释")
-    print("  ✓ 05_accuracy_comparison.png - 精度对比")
-    print("  ✓ REPORT.txt - 详细报告")
+    print("  ✓ 01_sample_faces.png - ORL数据集样本人脸")
+    print("  ✓ 02_misclassified_*.png - 被错误分类的人脸")
+    print("  ✓ 03_eigenfaces_PCA30.png - PCA特征脸（主成分）")
+    print("  ✓ 04_variance_explained.png - 方差解释分析图")
+    print("  ✓ 05_accuracy_comparison.png - 分类精度对比")
+    print("  ✓ REPORT.txt - 详细实验报告")
+    print("="*70)
 
 
 if __name__ == '__main__':
